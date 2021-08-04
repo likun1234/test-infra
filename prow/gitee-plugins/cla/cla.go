@@ -173,7 +173,7 @@ func (cl *cla) orgRepoConfig(org, repo string) (*pluginConfig, error) {
 
 	pc := cfg.CLAFor(org, repo)
 	if pc == nil {
-		return nil, fmt.Errorf("no cla plugin config for this repo:%s/%s", org, repo)
+		return nil, fmt.Errorf("no %s plugin config for this repo:%s/%s", cl.PluginName(), org, repo)
 	}
 
 	return pc, nil

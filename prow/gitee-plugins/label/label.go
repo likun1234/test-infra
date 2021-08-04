@@ -97,7 +97,7 @@ func (l *label) orgRepoCfg(org, repo string) (*labelCfg, error) {
 	}
 	labelCfg := cfg.labelFor(org, repo)
 	if labelCfg == nil {
-		return nil, fmt.Errorf("no label plugin config for this repo:%s/%s", org, repo)
+		return nil, fmt.Errorf("no %s plugin config for this repo:%s/%s", l.PluginName(), org, repo)
 	}
 	return labelCfg, nil
 }

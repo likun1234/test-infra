@@ -284,3 +284,13 @@ func HandleGenericComment(c Client, trigger plugins.Trigger, gc github.GenericCo
 	}
 	return RunRequested(c, pr, baseSHA, toTest, gc.GUID)
 }
+
+func GetJobNum(c Client, org, repo string, prNumber int) int {
+	refGetter := config.NewRefGetterForGitHubPullRequest(c.GitHubClient, org, repo, prNumber)
+
+	presubmits := getPresubmits(
+		c.Logger, c.GitClient, c.Config, org+"/"+repo,
+		refGetter.BaseSHA, refGetter.HeadSHA,
+	)
+	return len(presubmits)
+}

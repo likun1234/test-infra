@@ -3,6 +3,7 @@ package plugins
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -248,7 +249,7 @@ func (c BotComment) Exists() bool {
 	return c.Body != ""
 }
 
-func FindBotComment(allComments []sdk.PullRequestComments, botName string, re *regexp.Regexp) []BotComment {
+func FindBotComment(allComments []sdk.PullRequestComments, botName string, isTargetComment func(string) bool) []BotComment {
 	r := []BotComment{}
 	for i := range allComments {
 		item := &allComments[i]
@@ -257,7 +258,7 @@ func FindBotComment(allComments []sdk.PullRequestComments, botName string, re *r
 			continue
 		}
 
-		if re.MatchString(item.Body) {
+		if isTargetComment(item.Body) {
 			ut, err := time.Parse(time.RFC3339, item.UpdatedAt)
 			if err != nil {
 				// it is a invalid comment if parsing time failed
@@ -271,4 +272,12 @@ func FindBotComment(allComments []sdk.PullRequestComments, botName string, re *r
 		}
 	}
 	return r
+}
+
+func SortBotComments(c []BotComment) {
+	if len(c) > 1 {
+		sort.SliceStable(c, func(i, j int) bool {
+			return c[i].CreatedAt.Before(c[j].CreatedAt)
+		})
+	}
 }

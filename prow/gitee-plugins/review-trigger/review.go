@@ -99,7 +99,7 @@ func (rt *trigger) orgRepoConfig(org, repo string) (*pluginConfig, error) {
 
 	pc := cfg.TriggerFor(org, repo)
 	if pc == nil {
-		return nil, fmt.Errorf("no cla plugin config for this repo:%s/%s", org, repo)
+		return nil, fmt.Errorf("no %s plugin config for this repo:%s/%s", rt.PluginName(), org, repo)
 	}
 
 	return pc, nil

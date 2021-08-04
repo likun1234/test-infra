@@ -10,6 +10,7 @@ import (
 	prowapi "k8s.io/test-infra/prow/apis/prowjobs/v1"
 	prowConfig "k8s.io/test-infra/prow/config"
 	"k8s.io/test-infra/prow/git/v2"
+	"k8s.io/test-infra/prow/gitee"
 	plugins "k8s.io/test-infra/prow/gitee-plugins"
 	reporter "k8s.io/test-infra/prow/job-reporter"
 	"k8s.io/test-infra/prow/pluginhelp"
@@ -27,16 +28,18 @@ type trigger struct {
 	gec             giteeClient
 	ghc             *ghclient
 	pjc             prowJobClient
+	botName         string
 	gitClient       git.ClientFactory
 	getProwConf     prowConfig.Getter
 	getPluginConfig plugins.GetPluginConfig
 }
 
-func NewTrigger(f plugins.GetPluginConfig, f1 prowConfig.Getter, gec giteeClient, pjc prowJobClient, gitc git.ClientFactory) plugins.Plugin {
+func NewTrigger(f plugins.GetPluginConfig, f1 prowConfig.Getter, gec giteeClient, pjc prowJobClient, gitc git.ClientFactory, botName string) plugins.Plugin {
 	return &trigger{
 		gec:             gec,
 		ghc:             &ghclient{giteeClient: gec},
 		pjc:             pjc,
+		botName:         botName,
 		gitClient:       gitc,
 		getProwConf:     f1,
 		getPluginConfig: f,
@@ -44,12 +47,28 @@ func NewTrigger(f plugins.GetPluginConfig, f1 prowConfig.Getter, gec giteeClient
 }
 
 func (t *trigger) HelpProvider(enabledRepos []prowConfig.OrgRepo) (*pluginhelp.PluginHelp, error) {
-	c, err := t.buildOriginPluginConfig()
+	c, err := t.pluginConfig()
 	if err != nil {
 		return nil, err
 	}
 
-	return origint.HelpProvider(&c, enabledRepos)
+	cfg := originp.Configuration{
+		Triggers: c.originalTriggersConfig(),
+	}
+
+	p, err := origint.HelpProvider(&cfg, enabledRepos)
+	if err != nil {
+		return nil, err
+	}
+
+	p.AddCommand(pluginhelp.Command{
+		Usage:       "/check-ci",
+		Description: "Forces rechecking the CI status and adding CI label if possible.",
+		Featured:    true,
+		WhoCanUse:   "Anyone",
+		Examples:    []string{"/check-ci"},
+	})
+	return p, nil
 }
 
 func (t *trigger) PluginName() string {
@@ -73,20 +92,44 @@ func (t *trigger) handleNoteEvent(e *sdk.NoteEvent, log *logrus.Entry) error {
 		log.WithField("duration", time.Since(funcStart).String()).Debug("Completed handleNoteEvent")
 	}()
 
-	c, err := t.triggerFor(e.Repository.Namespace, e.Repository.Path)
+	ne := gitee.NewPRNoteEvent(e)
+	if !ne.IsPullRequest() {
+		return nil
+	}
+
+	org, repo := ne.GetOrgRep()
+	prNumber := ne.GetPRNumber()
+
+	c, err := t.orgRepoConfig(org, repo)
 	if err != nil {
 		return err
 	}
 
-	ge := plugins.NoteEventToCommentEvent(e)
-
 	cl := t.buildOriginClient(log)
-	cl.GitHubClient = &ghclient{giteeClient: t.gec, prNumber: ge.Number}
+	cl.GitHubClient = &ghclient{giteeClient: t.gec, prNumber: prNumber}
+
+	if isCheckCIComment(ne) {
+		return t.handleCheckCI(
+			ne, c.ciLabelConfig,
+			origint.GetJobNum(cl, org, repo, prNumber),
+			log,
+		)
+	}
+
+	if c.ciLabelConfig.isCIComment(ne.GetComment()) {
+		return t.handleCIComment(
+			ne, c.ciLabelConfig,
+			origint.GetJobNum(cl, org, repo, prNumber),
+			log,
+		)
+	}
 
 	return origint.HandleGenericComment(
-		cl, c, ge,
+		cl,
+		c.originalTriggerConfig(),
+		plugins.NoteEventToCommentEvent(e),
 		func(m []prowConfig.Presubmit) {
-			SetPresubmit(e.Repository.Namespace, e.Repository.Path, m)
+			SetPresubmit(org, repo, m)
 		},
 	)
 }
@@ -97,23 +140,21 @@ func (t *trigger) handlePullRequestEvent(e *sdk.PullRequestEvent, log *logrus.En
 		log.WithField("duration", time.Since(funcStart).String()).Debug("Completed handlePullRequest")
 	}()
 
-	c, err := t.triggerFor(e.Repository.Namespace, e.Repository.Path)
+	org, repo := gitee.GetOwnerAndRepoByPREvent(e)
+
+	c, err := t.orgRepoConfig(org, repo)
 	if err != nil {
 		return err
 	}
 
-	f := func(org, repo string) bool {
-		return t.ghc.hasApprovedPR(org, repo)
-	}
-
 	return origint.HandlePR(
 		t.buildOriginClient(log),
-		c,
+		c.originalTriggerConfig(),
 		plugins.ConvertPullRequestEvent(e),
 		func(m []prowConfig.Presubmit) {
-			SetPresubmit(e.Repository.Namespace, e.Repository.Path, m)
+			SetPresubmit(org, repo, m)
 		},
-		f,
+		t.ghc.hasApprovedPR,
 	)
 }
 
@@ -132,30 +173,32 @@ func (t *trigger) handlePushEvent(e *sdk.PushEvent, log *logrus.Entry) error {
 	)
 }
 
-func (t *trigger) buildOriginPluginConfig() (originp.Configuration, error) {
-	r := originp.Configuration{}
+func (t *trigger) orgRepoConfig(org, repo string) (*pluginConfig, error) {
+	cfg, err := t.pluginConfig()
+	if err != nil {
+		return nil, err
+	}
 
+	pc := cfg.triggerFor(org, repo)
+	if pc == nil {
+		return nil, fmt.Errorf("no %s plugin config for this repo:%s/%s", t.PluginName(), org, repo)
+	}
+
+	return pc, nil
+}
+
+func (t *trigger) pluginConfig() (*configuration, error) {
 	c := t.getPluginConfig(t.PluginName())
 	if c == nil {
-		return r, fmt.Errorf("can't find the trigger's configuration")
+		return nil, fmt.Errorf("can't find the configuration")
 	}
 
 	c1, ok := c.(*configuration)
 	if !ok {
-		return r, fmt.Errorf("can't convert to trigger's configuration")
+		return nil, fmt.Errorf("can't convert to configuration")
 	}
 
-	r.Triggers = c1.Triggers
-	return r, nil
-}
-
-func (t *trigger) triggerFor(org, repo string) (originp.Trigger, error) {
-	c, err := t.buildOriginPluginConfig()
-	if err != nil {
-		return originp.Trigger{}, err
-	}
-
-	return c.TriggerFor(org, repo), nil
+	return c1, nil
 }
 
 func (t *trigger) buildOriginClient(log *logrus.Entry) origint.Client {
@@ -174,13 +217,13 @@ func SetPresubmit(org, repo string, m []prowConfig.Presubmit) {
 		setJob(org, repo, &i.JobBase)
 	}*/
 
-	for i, _ := range m {
+	for i := range m {
 		setJob(org, repo, &m[i].JobBase)
 	}
 }
 
 func setPostsubmit(org, repo string, m []prowConfig.Postsubmit) {
-	for i, _ := range m {
+	for i := range m {
 		setJob(org, repo, &m[i].JobBase)
 	}
 }

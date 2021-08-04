@@ -36,7 +36,7 @@ func initPlugins(cfg prowConfig.Getter, agent *plugins.ConfigAgent, pm plugins.P
 	v = append(v, approve.NewApprove(gpc, cs.giteeClient, cs.ownersClient))
 	v = append(v, assign.NewAssign(gpc, cs.giteeClient))
 	v = append(v, lgtm.NewLGTM(gpc, agent.Config, cs.giteeClient, cs.ownersClient))
-	v = append(v, trigger.NewTrigger(gpc, cfg, cs.giteeClient, cs.prowJobClient, cs.giteeGitClient))
+	v = append(v, trigger.NewTrigger(gpc, cfg, cs.giteeClient, cs.prowJobClient, cs.giteeGitClient, botname))
 	v = append(v, slack.NewSlack(gpc, botname))
 	v = append(v, cla.NewCLA(gpc, cs.giteeClient))
 	v = append(v, claeuler.NewCLA(gpc, cs.giteeClient))

@@ -145,7 +145,7 @@ func (t tide) deleteOldComments(org, repo string, prNumber int) error {
 		return err
 	}
 
-	for _, c := range plugins.FindBotComment(comments, t.botName, tideNotificationRe) {
+	for _, c := range plugins.FindBotComment(comments, t.botName, tideNotificationRe.MatchString) {
 		t.ghc.DeletePRComment(org, repo, c.CommentID)
 	}
 
@@ -199,7 +199,7 @@ func (t *tide) orgRepoConfig(org, repo string) (*pluginConfig, error) {
 
 	pc := cfg.TideFor(org, repo)
 	if pc == nil {
-		return nil, fmt.Errorf("no cla plugin config for this repo:%s/%s", org, repo)
+		return nil, fmt.Errorf("no %s plugin config for this repo:%s/%s", t.PluginName(), org, repo)
 	}
 
 	return pc, nil
