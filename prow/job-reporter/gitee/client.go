@@ -67,11 +67,12 @@ func (c *ghclient) EditComment(org, repo string, ID int, comment string) error {
 
 func (c *ghclient) CreateStatus(org, repo, ref string, s github.Status) error {
 	prNumber := c.prNumber
-	var err error
 	if prNumber <= 0 {
-		if prNumber, err = parsePRNumber(org, repo, s); err != nil {
+		n, err := parsePRNumber(org, repo, s)
+		if err != nil {
 			return err
 		}
+		prNumber = n
 	}
 
 	h, err := newHelper(c, org, repo, prNumber)
@@ -79,33 +80,15 @@ func (c *ghclient) CreateStatus(org, repo, ref string, s github.Status) error {
 		return err
 	}
 
-	newComment, newLabel, invalidLabels := h.genCommentAndLabels(c.baseSHA, ref, &s)
+	newComment := h.genNewComment(c.baseSHA, ref, &s)
 	if newComment == "" {
 		return nil
 	}
 
 	if h.commentID() < 0 {
-		err = c.CreatePRComment(org, repo, prNumber, newComment)
-	} else {
-		err = c.UpdatePRComment(org, repo, h.commentID(), newComment)
+		return c.CreatePRComment(org, repo, prNumber, newComment)
 	}
-
-	var err1 error
-	if newLabel != "" {
-		err1 = c.AddPRLabel(org, repo, prNumber, newLabel)
-	}
-
-	var err2 error
-	for _, l := range invalidLabels {
-		err2 = c.RemovePRLabel(org, repo, prNumber, l)
-	}
-
-	if err != nil || err1 != nil || err2 != nil {
-		return fmt.Errorf(
-			"Failed to report job status, write comment error: %v, add label error: %v, remove labels error: %v",
-			err, err1, err2)
-	}
-	return nil
+	return c.UpdatePRComment(org, repo, h.commentID(), newComment)
 }
 
 func parsePRNumber(org, repo string, s github.Status) (int, error) {
